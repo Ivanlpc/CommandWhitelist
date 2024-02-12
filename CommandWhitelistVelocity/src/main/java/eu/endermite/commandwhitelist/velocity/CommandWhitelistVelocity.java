@@ -10,6 +10,7 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
+import com.velocitypowered.api.proxy.ServerConnection;
 import eu.endermite.commandwhitelist.common.CWGroup;
 import eu.endermite.commandwhitelist.common.CWPermission;
 import eu.endermite.commandwhitelist.common.CommandUtil;
@@ -22,10 +23,7 @@ import org.slf4j.Logger;
 
 import javax.inject.Inject;
 import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
+import java.util.*;
 
 public class CommandWhitelistVelocity {
 
@@ -78,28 +76,60 @@ public class CommandWhitelistVelocity {
     @SuppressWarnings("UnstableApiUsage")
     public void onUserCommandSendEvent(PlayerAvailableCommandsEvent event) {
         Player player = event.getPlayer();
-        if (player.hasPermission(CWPermission.BYPASS.permission())) return;
-        HashSet<String> allowedCommands = getCommands(player);
-        event.getRootNode().getChildren().removeIf((commandNode) ->
-                server.getCommandManager().hasCommand(commandNode.getName())
-                        && !allowedCommands.contains(commandNode.getName())
-        );
+        HashSet<String> serverCommands = getServerCommands(player);
+        if (serverCommands != null) {
+            event.getRootNode().getChildren().removeIf((commandNode) ->
+                    server.getCommandManager().hasCommand(commandNode.getName())
+                            && !serverCommands.contains(commandNode.getName())
+            );
+        } else {
+            if (player.hasPermission(CWPermission.BYPASS.permission())) return;
+            HashSet<String> allowedCommands = getCommands(player);
+            event.getRootNode().getChildren().removeIf((commandNode) ->
+                    server.getCommandManager().hasCommand(commandNode.getName())
+                            && !allowedCommands.contains(commandNode.getName())
+            );
+        }
+
+    }
+
+    private HashSet<String> getServerCommands(Player player) {
+        Optional<ServerConnection> currentServer = player.getCurrentServer();
+        String servername;
+        if(currentServer.isPresent()) {
+            servername = currentServer.get().getServerInfo().getName();
+        } else {
+            return null;
+        }
+        HashMap<String, CWGroup> servers = configCache.getServers();
+        if (!servers.containsKey(servername)) {
+            return null;
+        }
+        HashSet<String> serverCommands = new HashSet<>(servers.get(servername).getCommands());
+        return serverCommands;
     }
 
     @Subscribe
     public void onUserCommandExecuteEvent(CommandExecuteEvent event) {
         if (!(event.getCommandSource() instanceof Player)) return;
         Player player = (Player) event.getCommandSource();
+        HashSet<String> serverCommands = getServerCommands(player);
+        if (serverCommands != null) {
+          String label = CommandUtil.getCommandLabel(event.getCommand());
+            if (server.getCommandManager().hasCommand(label) && !serverCommands.contains(label))
+                event.setResult(CommandExecuteEvent.CommandResult.forwardToServer());
+        } else {
+            if (player.hasPermission(CWPermission.BYPASS.permission())) return;
 
-        if (player.hasPermission(CWPermission.BYPASS.permission())) return;
+            // Workaround for velocity executing "/ command" as valid command
+            String command = event.getCommand().trim();
 
-        // Workaround for velocity executing "/ command" as valid command
-        String command = event.getCommand().trim();
+            HashSet<String> allowedCommands = getCommands(player);
+            String label = CommandUtil.getCommandLabel(command);
+            if (server.getCommandManager().hasCommand(label) && !allowedCommands.contains(label))
+                event.setResult(CommandExecuteEvent.CommandResult.forwardToServer());
+        }
 
-        HashSet<String> allowedCommands = getCommands(player);
-        String label = CommandUtil.getCommandLabel(command);
-        if (server.getCommandManager().hasCommand(label) && !allowedCommands.contains(label))
-            event.setResult(CommandExecuteEvent.CommandResult.forwardToServer());
     }
 
     public ConfigCache getConfigCache() {
